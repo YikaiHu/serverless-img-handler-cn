@@ -32,6 +32,11 @@ export interface ServerlessImageHandlerProps {
   readonly enableDefaultFallbackImageParameter: CfnParameter;
   readonly fallbackImageS3BucketParameter: CfnParameter;
   readonly fallbackImageS3KeyParameter: CfnParameter;
+
+  readonly apiDomain?: CfnParameter;
+  readonly apiCertificateIamId?: CfnParameter;
+  readonly demoUIDomain?: CfnParameter;
+  readonly demoUICertificateIamId?: CfnParameter; 
 }
 
 /**
@@ -80,21 +85,41 @@ export class ServerlessImageHandler extends Construct {
         expression: cdk.Fn.conditionEquals(props.enableDefaultFallbackImageParameter.valueAsString, 'Yes')
       });
       enableDefaultFallbackImageCondition.overrideLogicalId('EnableDefaultFallbackImageCondition');
+      const isChinaRegionCondition = new cdk.CfnCondition(this, 'IsChinaRegionCondition', {
+        expression: cdk.Fn.conditionEquals(cdk.Aws.PARTITION, 'aws-cn')
+      });
 
-      const isOptInRegion = new cdk.CfnCondition(this, 'IsOptInRegion', {
-        expression: cdk.Fn.conditionOr(
-          cdk.Fn.conditionEquals("af-south-1", cdk.Aws.REGION),
-          cdk.Fn.conditionEquals("ap-east-1", cdk.Aws.REGION),
-          cdk.Fn.conditionEquals("eu-south-1" , cdk.Aws.REGION),
-          cdk.Fn.conditionEquals("me-south-1" , cdk.Aws.REGION)
-        )
-      });
-      isOptInRegion.overrideLogicalId('IsOptInRegion');
+
+      // const isOptInRegion = new cdk.CfnCondition(this, 'IsOptInRegion', {
+      //   expression: cdk.Fn.conditionOr(
+      //     cdk.Fn.conditionEquals("af-south-1", cdk.Aws.REGION),
+      //     cdk.Fn.conditionEquals("ap-east-1", cdk.Aws.REGION),
+      //     cdk.Fn.conditionEquals("eu-south-1" , cdk.Aws.REGION),
+      //     cdk.Fn.conditionEquals("me-south-1" , cdk.Aws.REGION)
+      //   )
+      // });
+      // isOptInRegion.overrideLogicalId('IsOptInRegion');
       
-      const isNotOptInRegion = new cdk.CfnCondition(this, 'IsNotOptInRegion', {
-        expression: cdk.Fn.conditionNot(isOptInRegion)
-      });
-      isNotOptInRegion.overrideLogicalId('IsNotOptInRegion')
+      // const isNotOptInRegion = new cdk.CfnCondition(this, 'IsNotOptInRegion', {
+      //   expression: cdk.Fn.conditionNot(isOptInRegion)
+      // });
+      // isNotOptInRegion.overrideLogicalId('IsNotOptInRegion')      
+      
+      isChinaRegionCondition.overrideLogicalId('IsChinaRegionCondition')
+
+      if (props.apiCertificateIamId) {
+        const apiCertificateCondition = new cdk.CfnCondition(this, 'ApiCertificateCondition', {
+          expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(props.apiCertificateIamId.valueAsString, ''))
+        })
+        apiCertificateCondition.overrideLogicalId('ApiCertificateCondition')
+      }
+
+      if (props.demoUICertificateIamId) {
+        const demoUICertificateCondition = new cdk.CfnCondition(this, 'DemoUICertificateCondition', {
+          expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(props.demoUICertificateIamId.valueAsString, ''))
+        })
+        demoUICertificateCondition.overrideLogicalId('DemoUICertificateCondition')
+      }
 
       // ImageHandlerFunctionRole
       const imageHandlerFunctionRole = new cdkIam.Role(this, 'ImageHandlerFunctionRole', {
@@ -137,8 +162,7 @@ export class ServerlessImageHandler extends Construct {
           }),
           new cdkIam.PolicyStatement({
             actions: [
-              'rekognition:DetectFaces',
-              'rekognition:DetectModerationLabels'
+              'rekognition:DetectFaces'
             ],
             resources: [
               '*'
@@ -198,12 +222,12 @@ export class ServerlessImageHandler extends Construct {
       });
       const cfnLambdaFunctionLogs = lambdaFunctionLogs.node.defaultChild as cdkLogs.CfnLogGroup;
       cfnLambdaFunctionLogs.retentionInDays = props.logRetentionPeriodParameter.valueAsNumber;
-      this.addCfnNagSuppressRules(cfnLambdaFunctionLogs, [
-        {
-          "id": "W84",
-          "reason": "Used to store store function info"
-        }
-      ]);
+      // this.addCfnNagSuppressRules(cfnLambdaFunctionLogs, [
+      //   {
+      //     "id": "W84",
+      //     "reason": "Used to store store function info"
+      //   }
+      // ]);
       cfnLambdaFunctionLogs.overrideLogicalId('ImageHandlerLogGroup');
 
       // CloudFrontToApiGatewayToLambda pattern
@@ -215,16 +239,6 @@ export class ServerlessImageHandler extends Construct {
 
       // ApiLogs
       const cfnApiGatewayLogGroup = apiGatewayLogGroup.node.defaultChild as cdkLogs.CfnLogGroup;
-      this.addCfnNagSuppressRules(cfnApiGatewayLogGroup, [
-        {
-          "id": "W84",
-          "reason": "Used to store store api log info, not using kms"
-        },
-        {
-          "id": "W86",
-          "reason": "Log retention specified in CloudFromation parameters."
-        }
-      ]);
       cfnApiGatewayLogGroup.overrideLogicalId('ApiLogs');
 
       // ImageHandlerApi
@@ -233,6 +247,13 @@ export class ServerlessImageHandler extends Construct {
       cfnApiGateway.name = 'ServerlessImageHandler';
       cfnApiGateway.body = apiBody;
       cfnApiGateway.overrideLogicalId('ImageHandlerApi');
+
+      // cfnApiGateway.parameters = cdk.Fn.conditionIf('IsChinaRegionCondition', {
+      //   endpointConfigurationTypes: 'REGIONAL',
+      //   ignore: 'documentation'
+      // }, {
+      //   endpointConfigurationTypes: 'EDGE'
+      // });
 
       // ImageHandlerPermission
       imageHandlerFunction.addPermission('ImageHandlerPermission', {
@@ -274,7 +295,6 @@ export class ServerlessImageHandler extends Construct {
       const cloudFrontToApiGateway = cloudFrontApiGatewayLambda.node.findChild('CloudFrontToApiGateway');
       const accessLogBucket = cloudFrontToApiGateway.node.findChild('CloudfrontLoggingBucket') as cdkS3.Bucket;
       const cfnAccessLogBucket = accessLogBucket.node.defaultChild as cdkS3.CfnBucket;
-      cfnAccessLogBucket.cfnOptions.condition = isNotOptInRegion;
       this.addCfnNagSuppressRules(cfnAccessLogBucket, [
         {
           "id": "W35",
@@ -285,81 +305,87 @@ export class ServerlessImageHandler extends Construct {
 
       // LogsBucketPolicy
       const accessLogBucketPolicy = accessLogBucket.node.findChild('Policy') as cdkS3.BucketPolicy;
-      const cfnAccessLogBucketPolicy = accessLogBucketPolicy.node.defaultChild as cdkS3.CfnBucketPolicy;
-      (accessLogBucketPolicy.node.defaultChild as cdkS3.CfnBucketPolicy).cfnOptions.condition = isNotOptInRegion;
       (accessLogBucketPolicy.node.defaultChild as cdkS3.CfnBucketPolicy).overrideLogicalId('LogsBucketPolicy');
 
-      //OptInRegionLogBucket
-      const optInRegionAccessLogBucket = cdkS3.Bucket.fromBucketAttributes(this, 'CloudFrontLoggingBucket', {
-        bucketName: 
-          cdk.Fn.getAtt(
-            cdk.Lazy.stringValue({ 
-              produce(context) {
-                return cfLoggingBucket.logicalId}
-            }), 
-          'bucketName').toString(),
-         region: 'us-east-1'
-      });
+      // //OptInRegionLogBucket
+      // const optInRegionAccessLogBucket = cdkS3.Bucket.fromBucketAttributes(this, 'CloudFrontLoggingBucket', {
+      //   bucketName: 
+      //     cdk.Fn.getAtt(
+      //       cdk.Lazy.stringValue({ 
+      //         produce(context) {
+      //           return cfLoggingBucket.logicalId}
+      //       }), 
+      //     'bucketName').toString(),
+      //    region: 'us-east-1'
+      // });
       
-      //OptInRegionLogBucketPolicy
-      const optInRegionPolicyStatement = cfnAccessLogBucketPolicy.policyDocument.toJSON().Statement[0];
-      optInRegionPolicyStatement.Resource = "";
+      // //OptInRegionLogBucketPolicy
+      // const optInRegionPolicyStatement = cfnAccessLogBucketPolicy.policyDocument.toJSON().Statement[0];
+      // optInRegionPolicyStatement.Resource = "";
 
-      //Choose Log Bucket
-      const cloudFrontLogsBucket = cdk.Fn.conditionIf(isOptInRegion.logicalId, optInRegionAccessLogBucket.bucketRegionalDomainName, accessLogBucket.bucketRegionalDomainName).toString();
+      // //Choose Log Bucket
+      // const cloudFrontLogsBucket = cdk.Fn.conditionIf(isOptInRegion.logicalId, optInRegionAccessLogBucket.bucketRegionalDomainName, accessLogBucket.bucketRegionalDomainName).toString();
       
       
-      //ImagehandlerCachePolicy
-      const cfnCachePolicy = new cdkCloudFront.CfnCachePolicy(
-        this, 
-        'CachePolicy', 
-        {
-          cachePolicyConfig: {
-            name: `${cdk.Aws.STACK_NAME}-${cdk.Aws.REGION}-ImageHandlerCachePolicy`,
-            defaultTtl: 86400,
-            minTtl: 1,
-            maxTtl: 31536000,
-            parametersInCacheKeyAndForwardedToOrigin: {
-              cookiesConfig: {cookieBehavior: "none"},
-              enableAcceptEncodingGzip: true,
-              headersConfig: {
-                headerBehavior: "whitelist", 
-                headers:['origin', 'accept']
-              },
-              queryStringsConfig: {
-                queryStringBehavior: "whitelist",
-                queryStrings: ["signature"]
-              },
-            }       
-        }
-      });
-      cfnCachePolicy.overrideLogicalId("ImageHandlerCachePolicy");
+      // //ImagehandlerCachePolicy
+      // const cfnCachePolicy = new cdkCloudFront.CfnCachePolicy(
+      //   this, 
+      //   'CachePolicy', 
+      //   {
+      //     cachePolicyConfig: {
+      //       name: `${cdk.Aws.STACK_NAME}-${cdk.Aws.REGION}-ImageHandlerCachePolicy`,
+      //       defaultTtl: 86400,
+      //       minTtl: 1,
+      //       maxTtl: 31536000,
+      //       parametersInCacheKeyAndForwardedToOrigin: {
+      //         cookiesConfig: {cookieBehavior: "none"},
+      //         enableAcceptEncodingGzip: true,
+      //         headersConfig: {
+      //           headerBehavior: "whitelist", 
+      //           headers:['origin', 'accept']
+      //         },
+      //         queryStringsConfig: {
+      //           queryStringBehavior: "whitelist",
+      //           queryStrings: ["signature"]
+      //         },
+      //       }       
+      //   }
+      // });
+      // cfnCachePolicy.overrideLogicalId("ImageHandlerCachePolicy");
 
-      //ImageHandlerOriginRequestPolicy
-      const cfnOriginRequestPolicy = new cdkCloudFront.CfnOriginRequestPolicy(
-        this, 
-        "OriginRequestPolicy",
-        {
-          originRequestPolicyConfig: { 
-            cookiesConfig: {cookieBehavior: "none"},
-            headersConfig: {
-              headerBehavior: "whitelist",
-              headers: ['origin', 'accept']
-            },
-            name: `${cdk.Aws.STACK_NAME}-${cdk.Aws.REGION}-ImageHandlerOriginRequestPolicy`,
-            queryStringsConfig: {
-              queryStringBehavior: "whitelist",
-              queryStrings: ["signature"]
-            },
-          }
-        });
-        cfnOriginRequestPolicy.overrideLogicalId("ImageHandlerOriginRequestPolicy");
+      // //ImageHandlerOriginRequestPolicy
+      // const cfnOriginRequestPolicy = new cdkCloudFront.CfnOriginRequestPolicy(
+      //   this, 
+      //   "OriginRequestPolicy",
+      //   {
+      //     originRequestPolicyConfig: { 
+      //       cookiesConfig: {cookieBehavior: "none"},
+      //       headersConfig: {
+      //         headerBehavior: "whitelist",
+      //         headers: ['origin', 'accept']
+      //       },
+      //       name: `${cdk.Aws.STACK_NAME}-${cdk.Aws.REGION}-ImageHandlerOriginRequestPolicy`,
+      //       queryStringsConfig: {
+      //         queryStringBehavior: "whitelist",
+      //         queryStrings: ["signature"]
+      //       },
+      //     }
+      //   });
+      //   cfnOriginRequestPolicy.overrideLogicalId("ImageHandlerOriginRequestPolicy");
  
       // ImageHandlerDistribution
+      // Here may could be tested in constructs!
       const cfnCloudFrontDistribution = cloudFrontWebDistribution.node.defaultChild as cdkCloudFront.CfnDistribution;
       cfnCloudFrontDistribution.distributionConfig = {
+        aliases: props.apiDomain ? [props.apiDomain.valueAsString] : undefined,
+        viewerCertificate: props.apiCertificateIamId ? cdk.Fn.conditionIf('ApiCertificateCondition', {
+          IamCertificateId: props.apiCertificateIamId.valueAsString,
+          SslSupportMethod: 'sni-only',
+          MinimumProtocolVersion: 'TLSv1.2_2018'
+        }, cdk.Aws.NO_VALUE) : undefined,
         origins: [{
-          domainName: `${apiGateway.restApiId}.execute-api.${cdk.Aws.REGION}.amazonaws.com`,
+          // domainName: `${apiGateway.restApiId}.execute-api.${cdk.Aws.REGION}.amazonaws.com`,
+          domainName: `${apiGateway.restApiId}.execute-api.${cdk.Aws.REGION}.${cdk.Aws.URL_SUFFIX}`,
           id: apiGateway.restApiId,
           originPath: '/image',
           customOriginConfig: {
@@ -374,10 +400,15 @@ export class ServerlessImageHandler extends Construct {
         defaultCacheBehavior: {
           allowedMethods: [ 'GET', 'HEAD' ],
           targetOriginId: apiGateway.restApiId,
-          viewerProtocolPolicy: 'https-only',
-          cachePolicyId: cfnCachePolicy.ref,
-          originRequestPolicyId: cfnOriginRequestPolicy.ref
-
+          forwardedValues: {
+            queryString: true,
+            queryStringCacheKeys: [ 'signature' ],
+            headers: [ 'Origin', 'Accept' ],
+            cookies: { forward: 'none' }
+          },
+          viewerProtocolPolicy: props.apiCertificateIamId ?
+            cdk.Fn.conditionIf('ApiCertificateCondition', 'redirect-to-https', 'allow-all').toString() :
+            'https-only'
         },
         customErrorResponses: [
           { errorCode: 500, errorCachingMinTtl: 10 },
@@ -389,7 +420,7 @@ export class ServerlessImageHandler extends Construct {
         priceClass: 'PriceClass_All',
         logging: {
           includeCookies: false,
-          bucket: cloudFrontLogsBucket,
+          bucket: accessLogBucket.bucketRegionalDomainName,
           prefix: 'image-handler-cf-logs/'
         }
       };
@@ -448,9 +479,16 @@ export class ServerlessImageHandler extends Construct {
       cfnDemoBucketPolicy.overrideLogicalId('DemoBucketPolicy');
 
       // DemoDistribution
+      // Here may could be used in aws construcst!
       const demoDistribution = cloudFrontToS3.cloudFrontWebDistribution;
       const cfnDemoDistribution = demoDistribution.node.defaultChild as cdkCloudFront.CfnDistribution;
       cfnDemoDistribution.distributionConfig = {
+        aliases: props.demoUIDomain ? [props.demoUIDomain.valueAsString] : undefined,
+        viewerCertificate: props.demoUICertificateIamId ? cdk.Fn.conditionIf('DemoUICertificateCondition', {
+          IamCertificateId: props.demoUICertificateIamId.valueAsString,
+          SslSupportMethod: 'sni-only',
+          MinimumProtocolVersion: 'TLSv1.2_2018'
+        }, cdk.Aws.NO_VALUE) : { cloudFrontDefaultCertificate: true },
         comment: 'Website distribution for solution',
         origins: [{
           id: 'S3-solution-website',
@@ -466,17 +504,16 @@ export class ServerlessImageHandler extends Construct {
           forwardedValues: {
             queryString: false
           },
-          viewerProtocolPolicy: 'redirect-to-https'
+          viewerProtocolPolicy: props.demoUICertificateIamId ?
+            cdk.Fn.conditionIf('DemoUICertificateCondition', 'redirect-to-https', 'allow-all').toString() :
+            'redirect-to-https'
         },
-        ipv6Enabled: true,
-        viewerCertificate: {
-          cloudFrontDefaultCertificate: true
-        },
+        ipv6Enabled: cdk.Fn.conditionIf('IsChinaRegionCondition', false, true),
         enabled: true,
         httpVersion: 'http2',
         logging: {
           includeCookies: false,
-          bucket: cloudFrontLogsBucket,
+          bucket: accessLogBucket.bucketRegionalDomainName,
           prefix: 'demo-cf-logs/'
         }
       };
@@ -514,10 +551,6 @@ export class ServerlessImageHandler extends Construct {
           }),
           new cdkIam.PolicyStatement({
             actions: [
-              's3:putBucketAcl',
-              's3:putEncryptionConfiguration',
-              's3:putBucketPolicy',
-              's3:CreateBucket',
               's3:GetObject',
               's3:PutObject',
               's3:ListBucket'
@@ -563,12 +596,6 @@ export class ServerlessImageHandler extends Construct {
       });
       const cfnCustomResourceLogGroup = customResourceLogGroup.node.defaultChild as cdkLogs.CfnLogGroup;
       cfnCustomResourceLogGroup.retentionInDays = props.logRetentionPeriodParameter.valueAsNumber;
-      this.addCfnNagSuppressRules(cfnCustomResourceLogGroup, [
-        {
-          "id": "W84",
-          "reason": "Used to store store function info, no kms used"
-        }
-      ]);
       cfnCustomResourceLogGroup.overrideLogicalId('CustomResourceLogGroup');
 
       // CustomResourceCopyS3
@@ -590,7 +617,21 @@ export class ServerlessImageHandler extends Construct {
       this.createCustomResource('CustomResourceConfig', customResourceFunction, {
         properties: [
           { path: 'Region', value: cdk.Aws.REGION },
-          { path: 'configItem', value: { apiEndpoint: `https://${cloudFrontWebDistribution.distributionDomainName}` } },
+          // { path: 'configItem', value: { apiEndpoint: `https://${cloudFrontWebDistribution.distributionDomainName}` } },
+          {
+            path: 'configItem', value: {
+              apiEndpoint:
+                props.apiDomain ?
+                  cdk.Fn.conditionIf('IsChinaRegionCondition',
+                    cdk.Fn.conditionIf('ApiCertificateCondition',
+                      cdk.Fn.sub('https://${ApiDomain}'),
+                      cdk.Fn.sub('http://${ApiDomain}')
+                    ),
+                    cdk.Fn.sub('https://${ImageHandlerDistribution.DomainName}')
+                  ).toString() :
+                  `https://${cloudFrontWebDistribution.distributionDomainName}`
+            }
+          },
           { path: 'destS3Bucket', value: demoBucket.bucketName },
           { path: 'destS3key', value: 'demo-ui-config.js' },
           { path: 'customAction', value: 'putConfigFile' },
@@ -672,19 +713,6 @@ export class ServerlessImageHandler extends Construct {
         ],
         condition: enableDefaultFallbackImageCondition,
         dependencies: [ cfnCustomResourceRole, cfnCustomResourcePolicy ]
-      });
-
-      const bucketSuffix = cdk.Aws.STACK_NAME + cdk.Aws.REGION + cdk.Aws.ACCOUNT_ID;
-      const cfLoggingBucket = this.createCustomResource('CustomCFLoggingBucket', customResourceFunction, {
-        properties: [
-         { path: 'customAction', value: 'createCFLoggingBucket' },
-         { path: 'stackName', value: cdk.Aws.STACK_NAME },
-         { path: 'bucketSuffix', value: bucketSuffix },
-         { path: 'policy', value: optInRegionPolicyStatement }
-        ],
-        condition: isOptInRegion,
-        dependencies: [ cfnCustomResourceRole, cfnCustomResourcePolicy ]
-
       });
     } catch (error) {
       console.error(error);
